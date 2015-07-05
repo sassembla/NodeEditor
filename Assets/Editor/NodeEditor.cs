@@ -47,7 +47,7 @@ namespace NodeEditor {
 			var window = GetWindow<NodeWindow>();
 			window.InitializeNodeWindow();
 		}
-		
+
 		List<Node> nodes = new List<Node>();
 		List<Connection> connections = new List<Connection>();
 
@@ -63,7 +63,7 @@ namespace NodeEditor {
 
 		/**
 			node window initializer.
-			setup nodes, points and connections data.
+			setup nodes, points and connections from saved data.
 		*/
 		public void InitializeNodeWindow () {
 			minSize = new Vector2(600f, 300f);
@@ -221,18 +221,35 @@ namespace NodeEditor {
 							connectionPoint tapped.
 						*/
 						case OnNodeEvent.EventType.EVENT_CONNECTIONPOINT_RECEIVE_TAPPED: {
+							var sourcePoint = e.eventSourceConnectionPoint;
+
 							var relatedConnections = connections.
 								Where(
-									con => con.IsStartAtConnectionPoint(e.eventSourceConnectionPoint) || 
-									con.IsEndAtConnectionPoint(e.eventSourceConnectionPoint)
+									con => con.IsStartAtConnectionPoint(sourcePoint) || 
+									con.IsEndAtConnectionPoint(sourcePoint)
 								).
 								ToList();
 
+							/*
+								show menuContext for control these connections.
+							*/
+							var menu = new GenericMenu();
 							foreach (var con in relatedConnections) {
-								Debug.Log("con.label:" + con.label);
+								var message = string.Empty;
+								if (sourcePoint.isInput) message = "from " + con.startPointInfo;
+								if (sourcePoint.isOutput) message = "to " + con.endPointInfo;
+								
+								var conId = con.connectionId;
+
+								menu.AddItem(
+									new GUIContent("delete connection:" + con.label + " " + message), 
+									false, 
+									() => {
+										DeleteConnection(conId);
+									}
+								);
 							}
-
-
+							menu.ShowAsContext();
 							break;
 						}
 
@@ -246,8 +263,6 @@ namespace NodeEditor {
 			}
 		}
 
-
-
 		private List<Node> NodesUnderPosition (Vector2 pos) {
 			return nodes.Where(n => n.ConitainsGlobalPos(pos)).ToList();
 		}
@@ -258,35 +273,41 @@ namespace NodeEditor {
 			}
 			return false;
 		}
+
+		private void DeleteConnection (string connectionId) {
+			for (var i = 0; i < connections.Count; i++) {
+				var con = connections[i];
+				if (con.connectionId == connectionId) connections.Remove(con);
+			}
+		}
 	}
 
 	public class Node {
-		private Action<OnNodeEvent> Emitter;
+		private Action<OnNodeEvent> Emit;
 
 		private List<ConnectionPoint> connectionPoints = new List<ConnectionPoint>();
 
 		private readonly int nodeWindowId;
-		private readonly string nodeNameText;
+		public readonly string nodeNameText;
 		
 		public Rect baseRect;
 
-		public Node (Action<OnNodeEvent> emitter, int id, string nodeNameText, Rect rect) {
+		public Node (Action<OnNodeEvent> emit, int id, string nodeNameText, Rect rect) {
 			this.nodeWindowId = id;
 			this.nodeNameText = nodeNameText;
 			this.baseRect = rect;
 
-			this.Emitter = emitter;
+			this.Emit = emit;
 
-			Debug.Log("適当に接続ポイントを足す。本来はクラス情報から抜き出しているはず。");
 			AddConnectionPoint();
 		}
 
 		public void AddConnectionPoint () {
 			Debug.Log("適当に足す。整列はその場で判断してやってくれればそれでいい。ポイント増えるときはリコンパイル走る関係で、個別ではなく一発で実行することになりそう。");
-			connectionPoints.Add(new InputPoint(nodeWindowId + ":0"));
-			connectionPoints.Add(new InputPoint(nodeWindowId + ":1"));
-			connectionPoints.Add(new OutputPoint(nodeWindowId + ":2"));
-			connectionPoints.Add(new OutputPoint(nodeWindowId + ":3"));
+			connectionPoints.Add(new InputPoint("p0"));
+			connectionPoints.Add(new InputPoint("p1"));
+			connectionPoints.Add(new OutputPoint("p2"));
+			connectionPoints.Add(new OutputPoint("p3"));
 
 			// update all connection point's index.
 
@@ -322,7 +343,7 @@ namespace NodeEditor {
 					only emit event.
 				*/
 				case EventType.Ignore: {
-					Emitter(new OnNodeEvent(OnNodeEvent.EventType.EVENT_CONNECTIONPOINT_DROPPED, this, Event.current.mousePosition, null));
+					Emit(new OnNodeEvent(OnNodeEvent.EventType.EVENT_CONNECTIONPOINT_DROPPED, this, Event.current.mousePosition, null));
 					break;
 				}
 				/*
@@ -330,7 +351,7 @@ namespace NodeEditor {
 					cancel connecting event.
 				*/
 				case EventType.MouseUp: {
-					Emitter(new OnNodeEvent(OnNodeEvent.EventType.EVENT_CONNECTIONPOINT_RELEASED, this, Event.current.mousePosition, null));
+					Emit(new OnNodeEvent(OnNodeEvent.EventType.EVENT_CONNECTIONPOINT_RELEASED, this, Event.current.mousePosition, null));
 					break;
 				}
 
@@ -338,17 +359,17 @@ namespace NodeEditor {
 					handling drag.
 				*/
 				case EventType.MouseDrag: {
-					Emitter(new OnNodeEvent(OnNodeEvent.EventType.EVENT_CONNECTIONPOINT_HANDLING, this, Event.current.mousePosition, null));
+					Emit(new OnNodeEvent(OnNodeEvent.EventType.EVENT_CONNECTIONPOINT_HANDLING, this, Event.current.mousePosition, null));
 					break;
 				}
 
 				/*
-					check if the mouse-down point is over one of connectionPoint in this node.
+					check if the mouse-down point is over one of the connectionPoint in this node.
 					then emit event.
 				*/
 				case EventType.MouseDown: {
 					var result = IsOverConnectionPoint(connectionPoints, Event.current.mousePosition);
-					if (result != null) Emitter(new OnNodeEvent(OnNodeEvent.EventType.EVENT_CONNECTIONPOINT_HANDLE_STARTED, this, Event.current.mousePosition, result));
+					if (result != null) Emit(new OnNodeEvent(OnNodeEvent.EventType.EVENT_CONNECTIONPOINT_HANDLE_STARTED, this, Event.current.mousePosition, result));
 					break;
 				}
 				
@@ -356,7 +377,7 @@ namespace NodeEditor {
 					if (currentEvent == EventType.Layout) break;
 					if (currentEvent == EventType.Repaint) break;
 					if (currentEvent == EventType.mouseMove) break;
-					Debug.Log("other currentEvent:" + currentEvent);
+					// Debug.Log("other currentEvent:" + currentEvent);
 					break;
 				}
 			}
@@ -368,7 +389,7 @@ namespace NodeEditor {
 					detect button-up event.
 				*/
 				var upInButtonRect = GUI.Button(point.buttonRect, string.Empty, point.buttonStyle);
-				if (upInButtonRect) Emitter(new OnNodeEvent(OnNodeEvent.EventType.EVENT_CONNECTIONPOINT_RECEIVE_TAPPED, this, Event.current.mousePosition, point));
+				if (upInButtonRect) Emit(new OnNodeEvent(OnNodeEvent.EventType.EVENT_CONNECTIONPOINT_RECEIVE_TAPPED, this, Event.current.mousePosition, point));
 			}
 
 
@@ -455,8 +476,6 @@ namespace NodeEditor {
 		public Rect buttonRect;
 		public string buttonStyle;
 
-		// private List<> connections なにか、ConnectionPointだけが保持すべき情報がある気がする。複数のoutから一つのIn、っていうケースがあるので。
-
 		public ConnectionPoint (string id, bool input, bool output) {
 			this.id = id;
 			this.isInput = input;
@@ -513,6 +532,10 @@ namespace NodeEditor {
 
 	public class Connection {
 		public readonly string label;
+		public readonly string connectionId;
+
+		public readonly string startPointInfo;
+		public readonly string endPointInfo;
 
 		public readonly Node startNode;
 		public readonly ConnectionPoint outputPoint;
@@ -522,10 +545,15 @@ namespace NodeEditor {
 
 		public Connection (string label, Node start, ConnectionPoint output, Node end, ConnectionPoint input) {
 			this.label = label;
+			this.connectionId = Guid.NewGuid().ToString();
+
 			this.startNode = start;
 			this.outputPoint = output;
 			this.endNode = end;
 			this.inputPoint = input;
+
+			this.startPointInfo = start.nodeNameText + ":" + output.id;
+			this.endPointInfo = end.nodeNameText + ":" + input.id;
 		}
 
 		public void DrawConnection () {
